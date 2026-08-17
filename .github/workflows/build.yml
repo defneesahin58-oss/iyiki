@@ -1,0 +1,39 @@
+﻿name: Mobil Uygulama Derleme (Android & iOS)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Android APK Uret
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build apk --release --no-tree-shake-icons
+      - name: APK Dosyasini Indirmeye Hazirla
+        uses: actions/upload-artifact@v4
+        with:
+          name: Iyiki-Android-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    name: iOS Uygulamasi Uret
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build ios --release --no-codesign --no-tree-shake-icons
+      - name: iOS Dosyasini Indirmeye Hazirla
+        uses: actions/upload-artifact@v4
+        with:
+          name: Iyiki-iOS-Build
+          path: build/ios/iphoneos
