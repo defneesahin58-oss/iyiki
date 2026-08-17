@@ -1,12 +1,17 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:file_picker/file_picker.dart';
 
-void main() {
+late SharedPreferences prefs;
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  prefs = await SharedPreferences.getInstance();
   runApp(const IyikiApp());
 }
 
@@ -320,8 +325,8 @@ class _RootGateState extends State<RootGate> {
   }
 
   void _checkCurrentUser() {
-    final rawUser = html.window.localStorage['iyiki_active_user'];
-    final rawDefneFlag = html.window.localStorage['iyiki_is_defne_impersonating'];
+    final rawUser = prefs.getString('iyiki_active_user');
+    final rawDefneFlag = prefs.getString('iyiki_is_defne_impersonating');
     isDefneVisiting = rawDefneFlag == 'true';
 
     if (rawUser != null && rawUser.isNotEmpty) {
@@ -336,8 +341,8 @@ class _RootGateState extends State<RootGate> {
 
   void _onUserRegistered(UserAccount user) {
     _saveRegisteredUserDirectory(user);
-    html.window.localStorage['iyiki_active_user'] = jsonEncode(user.toJson());
-    html.window.localStorage['iyiki_is_defne_impersonating'] = 'false';
+    prefs.setString('iyiki_active_user', jsonEncode(user.toJson()));
+    prefs.setString('iyiki_is_defne_impersonating', 'false');
     setState(() {
       currentUser = user;
       isDefneVisiting = false;
@@ -346,16 +351,16 @@ class _RootGateState extends State<RootGate> {
 
   void _saveRegisteredUserDirectory(UserAccount user) {
     try {
-      final rawDir = html.window.localStorage['iyiki_user_directory'];
+      final rawDir = prefs.getString('iyiki_user_directory');
       Map<String, dynamic> dir = rawDir != null ? jsonDecode(rawDir) : {};
       dir[user.baseRole] = user.toJson();
-      html.window.localStorage['iyiki_user_directory'] = jsonEncode(dir);
+      prefs.setString('iyiki_user_directory', jsonEncode(dir));
     } catch (_) {}
   }
 
   void _onUserLogout() {
-    html.window.localStorage.remove('iyiki_active_user');
-    html.window.localStorage.remove('iyiki_is_defne_impersonating');
+    prefs.remove('iyiki_active_user');
+    prefs.remove('iyiki_is_defne_impersonating');
     setState(() {
       currentUser = null;
       isDefneVisiting = false;
@@ -364,8 +369,8 @@ class _RootGateState extends State<RootGate> {
 
   void _onUserSwitch(UserAccount targetUser) {
     final willBeVisiting = targetUser.baseRole != 'Defne';
-    html.window.localStorage['iyiki_is_defne_impersonating'] = willBeVisiting ? 'true' : 'false';
-    html.window.localStorage['iyiki_active_user'] = jsonEncode(targetUser.toJson());
+    prefs.setString('iyiki_is_defne_impersonating', willBeVisiting ? 'true' : 'false');
+    prefs.setString('iyiki_active_user', jsonEncode(targetUser.toJson()));
     
     setState(() {
       currentUser = targetUser;
@@ -375,7 +380,7 @@ class _RootGateState extends State<RootGate> {
 
   void _returnHomeToDefne() {
     try {
-      final rawDir = html.window.localStorage['iyiki_user_directory'];
+      final rawDir = prefs.getString('iyiki_user_directory');
       if (rawDir != null) {
         final Map<String, dynamic> dir = jsonDecode(rawDir);
         if (dir.containsKey('Defne')) {
@@ -392,7 +397,7 @@ class _RootGateState extends State<RootGate> {
 
   void _onUserUpdated(UserAccount user) {
     _saveRegisteredUserDirectory(user);
-    html.window.localStorage['iyiki_active_user'] = jsonEncode(user.toJson());
+    prefs.setString('iyiki_active_user', jsonEncode(user.toJson()));
     setState(() {
       currentUser = user;
     });
@@ -448,7 +453,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _checkExistingUser() {
     try {
-      final rawDir = html.window.localStorage['iyiki_user_directory'];
+      final rawDir = prefs.getString('iyiki_user_directory');
       if (rawDir != null) {
         final Map<String, dynamic> dir = jsonDecode(rawDir);
         if (dir.containsKey(selectedBaseRole)) {
@@ -460,6 +465,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
     } catch (_) {}
     _nameController.text = selectedBaseRole;
+  }
+
+  Future<void> _pickAvatar() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result != null && result.files.isNotEmpty) {
+      final bytes = result.files.first.bytes;
+      if (bytes != null) {
+        setState(() {
+          pickedAvatarUrl = 'data:image/png;base64,${base64Encode(bytes)}';
+        });
+      }
+    }
   }
 
   @override
@@ -500,44 +520,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 24),
                 GestureDetector(
-                  onTap: () {
-                    final uploadInput = html.FileUploadInputElement();
-                    uploadInput.accept = 'image/*';
-                    uploadInput.click();
-
-                    uploadInput.onChange.listen((e) {
-                      final files = uploadInput.files;
-                      if (files != null && files.isNotEmpty) {
-                        final reader = html.FileReader();
-                        reader.readAsDataUrl(files[0]);
-                        reader.onLoadEnd.listen((ev) {
-                          setState(() {
-                            pickedAvatarUrl = reader.result as String;
-                          });
-                        });
-                      }
-                    });
-                  },
+                  onTap: _pickAvatar,
                   child: Stack(
                     children: [
                       CircleAvatar(
                         radius: 46,
                         backgroundColor: const Color(0xFFFCE4EC),
                         backgroundImage: pickedAvatarUrl != null
-                            ? NetworkImage(pickedAvatarUrl!)
+                            ? MemoryImage(base64Decode(pickedAvatarUrl!.split(',').last))
                             : null,
                         child: pickedAvatarUrl == null
                             ? const Icon(Icons.add_a_photo,
                                 size: 32, color: Color(0xFFD81B60))
                             : null,
                       ),
-                      Positioned(
+                      const Positioned(
                         bottom: 0,
                         right: 0,
                         child: CircleAvatar(
                           radius: 14,
-                          backgroundColor: const Color(0xFFD81B60),
-                          child: const Icon(Icons.edit,
+                          backgroundColor: Color(0xFFD81B60),
+                          child: Icon(Icons.edit,
                               size: 14, color: Colors.white),
                         ),
                       ),
@@ -688,9 +691,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _waveController;
+  final AudioPlayer _audioPlayer = AudioPlayer();
 
   int _selectedTabIndex = 0;
-  html.AudioElement? _activeAudio;
   String? _currentlyPlayingId;
   String? _highlightedMemoryId;
 
@@ -763,25 +766,33 @@ class _HomeScreenState extends State<HomeScreen>
     friendMoods[widget.currentUser.baseRole] = widget.currentUser.currentMood;
     friendAvatars[widget.currentUser.baseRole] = widget.currentUser.avatarUrl;
 
+    _audioPlayer.onPlayerComplete.listen((_) {
+      if (mounted) {
+        setState(() {
+          _currentlyPlayingId = null;
+        });
+      }
+    });
+
     _loadDataFromStorage();
   }
 
   @override
   void dispose() {
     _waveController.dispose();
-    _activeAudio?.pause();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
   void _loadDataFromStorage() {
     try {
-      final memoriesJson = html.window.localStorage['iyiki_memories'];
+      final memoriesJson = prefs.getString('iyiki_memories');
       if (memoriesJson != null && memoriesJson.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(memoriesJson);
         memories = decoded.map((e) => MemoryItem.fromJson(e)).toList();
       }
 
-      final specialDaysJson = html.window.localStorage['iyiki_special_days'];
+      final specialDaysJson = prefs.getString('iyiki_special_days');
       if (specialDaysJson != null && specialDaysJson.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(specialDaysJson);
         specialDays = decoded.map((e) => SpecialDayItem.fromJson(e)).toList();
@@ -807,7 +818,7 @@ class _HomeScreenState extends State<HomeScreen>
         _saveSpecialDaysToStorage();
       }
 
-      final bucketJson = html.window.localStorage['iyiki_bucket_list'];
+      final bucketJson = prefs.getString('iyiki_bucket_list');
       if (bucketJson != null && bucketJson.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(bucketJson);
         bucketList = decoded.map((e) => BucketItem.fromJson(e)).toList();
@@ -821,7 +832,7 @@ class _HomeScreenState extends State<HomeScreen>
         _saveBucketListToStorage();
       }
 
-      final storiesJson = html.window.localStorage['iyiki_stories'];
+      final storiesJson = prefs.getString('iyiki_stories');
       if (storiesJson != null && storiesJson.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(storiesJson);
         final now = DateTime.now();
@@ -831,13 +842,13 @@ class _HomeScreenState extends State<HomeScreen>
             .toList();
       }
 
-      final fbJson = html.window.localStorage['iyiki_feedbacks'];
+      final fbJson = prefs.getString('iyiki_feedbacks');
       if (fbJson != null && fbJson.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(fbJson);
         feedbackList = decoded.map((e) => FeedbackMessage.fromJson(e)).toList();
       }
 
-      final moodsJson = html.window.localStorage['iyiki_friend_moods'];
+      final moodsJson = prefs.getString('iyiki_friend_moods');
       if (moodsJson != null && moodsJson.isNotEmpty) {
         final Map<String, dynamic> decoded = jsonDecode(moodsJson);
         decoded.forEach((k, v) {
@@ -845,7 +856,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
 
-      final rawDir = html.window.localStorage['iyiki_user_directory'];
+      final rawDir = prefs.getString('iyiki_user_directory');
       if (rawDir != null) {
         final Map<String, dynamic> decoded = jsonDecode(rawDir);
         decoded.forEach((k, v) {
@@ -854,7 +865,7 @@ class _HomeScreenState extends State<HomeScreen>
         });
       }
 
-      final lastMeetStr = html.window.localStorage['iyiki_last_meet'];
+      final lastMeetStr = prefs.getString('iyiki_last_meet');
       if (lastMeetStr != null) {
         lastMeetDate = DateTime.tryParse(lastMeetStr) ?? DateTime(2026, 8, 10);
       }
@@ -865,72 +876,75 @@ class _HomeScreenState extends State<HomeScreen>
   void _saveMemoriesToStorage() {
     try {
       final encoded = jsonEncode(memories.map((m) => m.toJson()).toList());
-      html.window.localStorage['iyiki_memories'] = encoded;
+      prefs.setString('iyiki_memories', encoded);
     } catch (_) {}
   }
 
   void _saveSpecialDaysToStorage() {
     try {
       final encoded = jsonEncode(specialDays.map((s) => s.toJson()).toList());
-      html.window.localStorage['iyiki_special_days'] = encoded;
+      prefs.setString('iyiki_special_days', encoded);
     } catch (_) {}
   }
 
   void _saveBucketListToStorage() {
     try {
       final encoded = jsonEncode(bucketList.map((b) => b.toJson()).toList());
-      html.window.localStorage['iyiki_bucket_list'] = encoded;
+      prefs.setString('iyiki_bucket_list', encoded);
     } catch (_) {}
   }
 
   void _saveStoriesToStorage() {
     try {
       final encoded = jsonEncode(activeStories.map((s) => s.toJson()).toList());
-      html.window.localStorage['iyiki_stories'] = encoded;
+      prefs.setString('iyiki_stories', encoded);
     } catch (_) {}
   }
 
   void _saveFeedbacksToStorage() {
     try {
       final encoded = jsonEncode(feedbackList.map((f) => f.toJson()).toList());
-      html.window.localStorage['iyiki_feedbacks'] = encoded;
+      prefs.setString('iyiki_feedbacks', encoded);
     } catch (_) {}
   }
 
   void _saveMoodsToStorage() {
     try {
-      html.window.localStorage['iyiki_friend_moods'] = jsonEncode(friendMoods);
+      prefs.setString('iyiki_friend_moods', jsonEncode(friendMoods));
     } catch (_) {}
   }
 
   void _saveLastMeetToStorage() {
     try {
-      html.window.localStorage['iyiki_last_meet'] = lastMeetDate.toIso8601String();
+      prefs.setString('iyiki_last_meet', lastMeetDate.toIso8601String());
     } catch (_) {}
   }
 
-  void _playAudio(String id, String url) {
+  void _playAudio(String id, String url) async {
     if (_currentlyPlayingId == id) {
-      _activeAudio?.pause();
+      await _audioPlayer.pause();
       setState(() {
         _currentlyPlayingId = null;
       });
       return;
     }
 
-    _activeAudio?.pause();
-    _activeAudio = html.AudioElement(url);
-    _activeAudio!.play();
-
+    await _audioPlayer.stop();
     setState(() {
       _currentlyPlayingId = id;
     });
 
-    _activeAudio!.onEnded.listen((event) {
+    try {
+      if (url.startsWith('data:')) {
+        await _audioPlayer.play(BytesSource(base64Decode(url.split(',').last)));
+      } else {
+        await _audioPlayer.play(UrlSource(url));
+      }
+    } catch (_) {
       setState(() {
         _currentlyPlayingId = null;
       });
-    });
+    }
   }
 
   void _toggleLike(MemoryItem memory) {
@@ -959,7 +973,7 @@ class _HomeScreenState extends State<HomeScreen>
           ElevatedButton(
             onPressed: () {
               if (_currentlyPlayingId == memoryId) {
-                _activeAudio?.pause();
+                _audioPlayer.stop();
                 _currentlyPlayingId = null;
               }
               setState(() {
@@ -1005,6 +1019,20 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
+  Future<void> _pickAndAddStory() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true,
+    );
+    if (result != null && result.files.isNotEmpty) {
+      final bytes = result.files.first.bytes;
+      if (bytes != null) {
+        final dataUrl = 'data:image/png;base64,${base64Encode(bytes)}';
+        _showStoryPreviewAndConfirm(dataUrl);
+      }
+    }
+  }
+
   void _showAddStoryDialog() {
     showModalBottomSheet(
       context: context,
@@ -1022,136 +1050,23 @@ class _HomeScreenState extends State<HomeScreen>
             const SizedBox(height: 16),
             const Text('Hikaye Ekle 📸✨', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
             const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _openWebCameraForStory();
-                    },
-                    icon: const Icon(Icons.camera_alt, color: Colors.white),
-                    label: const Text('Kamerayı Aç', style: TextStyle(color: Colors.white)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFD81B60),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      final uploadInput = html.FileUploadInputElement();
-                      uploadInput.accept = 'image/*';
-                      uploadInput.click();
-
-                      uploadInput.onChange.listen((e) {
-                        final files = uploadInput.files;
-                        if (files != null && files.isNotEmpty) {
-                          final reader = html.FileReader();
-                          reader.readAsDataUrl(files[0]);
-                          reader.onLoadEnd.listen((ev) {
-                            _showStoryPreviewAndConfirm(reader.result as String);
-                          });
-                        }
-                      });
-                    },
-                    icon: const Icon(Icons.photo_library, color: Color(0xFFD81B60)),
-                    label: const Text('Galeriden Seç', style: TextStyle(color: Color(0xFFD81B60))),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Color(0xFFF48FB1)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                  ),
-                ),
-              ],
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _pickAndAddStory();
+              },
+              icon: const Icon(Icons.photo_library, color: Colors.white),
+              label: const Text('Galeriden Fotoğraf Seç', style: TextStyle(color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD81B60),
+                minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
             ),
           ],
         ),
       ),
     );
-  }
-
-  void _openWebCameraForStory() async {
-    try {
-      final mediaStream = await html.window.navigator.mediaDevices?.getUserMedia({'video': true});
-      if (mediaStream == null) return;
-
-      final videoElement = html.VideoElement()
-        ..srcObject = mediaStream
-        ..autoplay = true
-        ..style.width = '100%'
-        ..style.height = 'auto'
-        ..style.borderRadius = '16px';
-
-      if (!mounted) return;
-
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (cCtx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: const Text('Kamerayla Hikaye Çek 📸', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 320,
-                height: 240,
-                child: HtmlElementView.fromTagName(
-                  tagName: 'video',
-                  onElementCreated: (element) {
-                    final v = element as html.VideoElement;
-                    v.srcObject = mediaStream;
-                    v.autoplay = true;
-                    v.style.width = '100%';
-                    v.style.height = '100%';
-                    v.style.objectFit = 'cover';
-                    v.style.borderRadius = '16px';
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () {
-                  final canvas = html.CanvasElement(width: 640, height: 480);
-                  canvas.context2D.drawImage(videoElement, 0, 0);
-                  final dataUrl = canvas.toDataUrl('image/jpeg');
-
-                  mediaStream.getTracks().forEach((track) => track.stop());
-                  Navigator.pop(cCtx);
-                  _showStoryPreviewAndConfirm(dataUrl);
-                },
-                icon: const Icon(Icons.camera, color: Colors.white),
-                label: const Text('Fotoğrafı Çek ✨', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFD81B60),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                mediaStream.getTracks().forEach((track) => track.stop());
-                Navigator.pop(cCtx);
-              },
-              child: const Text('İptal', style: TextStyle(color: Colors.grey)),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Kamera açılamadı: $e')),
-      );
-    }
   }
 
   void _showStoryPreviewAndConfirm(String imageUrl) {
@@ -1182,7 +1097,9 @@ class _HomeScreenState extends State<HomeScreen>
               Expanded(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: Image.network(imageUrl, fit: BoxFit.contain),
+                  child: imageUrl.startsWith('data:')
+                      ? Image.memory(base64Decode(imageUrl.split(',').last), fit: BoxFit.contain)
+                      : Image.network(imageUrl, fit: BoxFit.contain),
                 ),
               ),
               const SizedBox(height: 16),
@@ -1262,7 +1179,9 @@ class _HomeScreenState extends State<HomeScreen>
               child: Stack(
                 children: [
                   Center(
-                    child: Image.network(currentStory.imageUrl, fit: BoxFit.contain),
+                    child: currentStory.imageUrl.startsWith('data:')
+                        ? Image.memory(base64Decode(currentStory.imageUrl.split(',').last), fit: BoxFit.contain)
+                        : Image.network(currentStory.imageUrl, fit: BoxFit.contain),
                   ),
                   Positioned.fill(
                     child: Row(
@@ -1325,7 +1244,9 @@ class _HomeScreenState extends State<HomeScreen>
                               radius: 18,
                               backgroundColor: const Color(0xFFD81B60),
                               backgroundImage: currentStory.authorAvatar != null
-                                  ? NetworkImage(currentStory.authorAvatar!)
+                                  ? (currentStory.authorAvatar!.startsWith('data:')
+                                      ? MemoryImage(base64Decode(currentStory.authorAvatar!.split(',').last))
+                                      : NetworkImage(currentStory.authorAvatar!) as ImageProvider)
                                   : null,
                               child: currentStory.authorAvatar == null
                                   ? Text(currentStory.authorName.isNotEmpty ? currentStory.authorName[0] : '🌸',
@@ -1651,7 +1572,7 @@ class _HomeScreenState extends State<HomeScreen>
   void _openDefneUserSwitcherDialog() {
     Map<String, UserAccount> registeredUsers = {};
     try {
-      final rawDir = html.window.localStorage['iyiki_user_directory'];
+      final rawDir = prefs.getString('iyiki_user_directory');
       if (rawDir != null) {
         final Map<String, dynamic> decoded = jsonDecode(rawDir);
         decoded.forEach((k, v) {
@@ -1702,7 +1623,11 @@ class _HomeScreenState extends State<HomeScreen>
                 child: ListTile(
                   leading: CircleAvatar(
                     backgroundColor: f.cardColor,
-                    backgroundImage: existing?.avatarUrl != null ? NetworkImage(existing!.avatarUrl!) : null,
+                    backgroundImage: existing?.avatarUrl != null
+                        ? (existing!.avatarUrl!.startsWith('data:')
+                            ? MemoryImage(base64Decode(existing.avatarUrl!.split(',').last))
+                            : NetworkImage(existing.avatarUrl!) as ImageProvider)
+                        : null,
                     child: existing?.avatarUrl == null
                         ? Text(displayName[0].toUpperCase(), style: TextStyle(color: f.textColor, fontWeight: FontWeight.bold))
                         : null,
@@ -1783,26 +1708,23 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                     const SizedBox(height: 20),
                     GestureDetector(
-                      onTap: () {
-                        final uploadInput = html.FileUploadInputElement();
-                        uploadInput.accept = 'image/*';
-                        uploadInput.click();
-
-                        uploadInput.onChange.listen((e) {
-                          final files = uploadInput.files;
-                          if (files != null && files.isNotEmpty) {
-                            final reader = html.FileReader();
-                            reader.readAsDataUrl(files[0]);
-                            reader.onLoadEnd.listen((ev) {
-                              setProfileState(() {
-                                widget.currentUser.avatarUrl = reader.result as String;
-                              });
-                              friendAvatars[widget.currentUser.baseRole] = reader.result as String;
-                              widget.onUserUpdated(widget.currentUser);
-                              setState(() {});
+                      onTap: () async {
+                        final result = await FilePicker.platform.pickFiles(
+                          type: FileType.image,
+                          withData: true,
+                        );
+                        if (result != null && result.files.isNotEmpty) {
+                          final bytes = result.files.first.bytes;
+                          if (bytes != null) {
+                            final dataUrl = 'data:image/png;base64,${base64Encode(bytes)}';
+                            setProfileState(() {
+                              widget.currentUser.avatarUrl = dataUrl;
                             });
+                            friendAvatars[widget.currentUser.baseRole] = dataUrl;
+                            widget.onUserUpdated(widget.currentUser);
+                            setState(() {});
                           }
-                        });
+                        }
                       },
                       child: Stack(
                         children: [
@@ -1810,7 +1732,9 @@ class _HomeScreenState extends State<HomeScreen>
                             radius: 46,
                             backgroundColor: const Color(0xFFFCE4EC),
                             backgroundImage: widget.currentUser.avatarUrl != null
-                                ? NetworkImage(widget.currentUser.avatarUrl!)
+                                ? (widget.currentUser.avatarUrl!.startsWith('data:')
+                                    ? MemoryImage(base64Decode(widget.currentUser.avatarUrl!.split(',').last))
+                                    : NetworkImage(widget.currentUser.avatarUrl!) as ImageProvider)
                                 : null,
                             child: widget.currentUser.avatarUrl == null
                                 ? Text(
@@ -1819,13 +1743,13 @@ class _HomeScreenState extends State<HomeScreen>
                                   )
                                 : null,
                           ),
-                          Positioned(
+                          const Positioned(
                             bottom: 0,
                             right: 0,
                             child: CircleAvatar(
                               radius: 14,
-                              backgroundColor: const Color(0xFFD81B60),
-                              child: const Icon(Icons.camera_alt, size: 14, color: Colors.white),
+                              backgroundColor: Color(0xFFD81B60),
+                              child: Icon(Icons.camera_alt, size: 14, color: Colors.white),
                             ),
                           ),
                         ],
@@ -2585,12 +2509,15 @@ class _HomeScreenState extends State<HomeScreen>
                       });
                     },
                     itemBuilder: (context, idx) {
+                      final img = images[idx];
                       return InteractiveViewer(
                         panEnabled: true,
                         minScale: 0.8,
                         maxScale: 3.5,
                         child: Center(
-                          child: Image.network(images[idx], fit: BoxFit.contain),
+                          child: img.startsWith('data:')
+                              ? Image.memory(base64Decode(img.split(',').last), fit: BoxFit.contain)
+                              : Image.network(img, fit: BoxFit.contain),
                         ),
                       );
                     },
@@ -2614,27 +2541,6 @@ class _HomeScreenState extends State<HomeScreen>
                             '${currentIndex + 1} / ${images.length}',
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                           ),
-                        const Spacer(),
-                        ElevatedButton.icon(
-                          onPressed: () {
-                            final anchor = html.AnchorElement(href: images[currentIndex])
-                              ..target = 'blank'
-                              ..download = 'iyiki_fotograf_${DateTime.now().millisecondsSinceEpoch}.png';
-                            anchor.click();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Fotoğraf indiriliyor... 📸✨'),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.download, color: Colors.white, size: 18),
-                          label: const Text('İndir', style: TextStyle(color: Colors.white)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFD81B60),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -2676,7 +2582,11 @@ class _HomeScreenState extends State<HomeScreen>
               CircleAvatar(
                 radius: 36,
                 backgroundColor: friend.cardColor,
-                backgroundImage: friendAvatar != null ? NetworkImage(friendAvatar) : null,
+                backgroundImage: friendAvatar != null
+                    ? (friendAvatar.startsWith('data:')
+                        ? MemoryImage(base64Decode(friendAvatar.split(',').last))
+                        : NetworkImage(friendAvatar) as ImageProvider)
+                    : null,
                 child: friendAvatar == null ? Icon(friend.icon, color: friend.textColor, size: 36) : null,
               ),
               const SizedBox(height: 10),
@@ -2748,12 +2658,7 @@ class _HomeScreenState extends State<HomeScreen>
   void _showAddMemoryDialog() {
     final textController = TextEditingController();
     DateTime selectedMemoryDate = DateTime.now();
-
-    html.MediaRecorder? mediaRecorder;
-    List<html.Blob> audioChunks = [];
-    String? recordedAudioUrl;
     List<String> pickedImageUrls = [];
-    bool isRecording = false;
 
     showModalBottomSheet(
       context: context,
@@ -2848,6 +2753,7 @@ class _HomeScreenState extends State<HomeScreen>
                           scrollDirection: Axis.horizontal,
                           itemCount: pickedImageUrls.length,
                           itemBuilder: (context, idx) {
+                            final img = pickedImageUrls[idx];
                             return Stack(
                               children: [
                                 Container(
@@ -2857,7 +2763,9 @@ class _HomeScreenState extends State<HomeScreen>
                                   decoration: BoxDecoration(
                                     borderRadius: BorderRadius.circular(14),
                                     image: DecorationImage(
-                                      image: NetworkImage(pickedImageUrls[idx]),
+                                      image: img.startsWith('data:')
+                                          ? MemoryImage(base64Decode(img.split(',').last))
+                                          : NetworkImage(img) as ImageProvider,
                                       fit: BoxFit.cover,
                                     ),
                                   ),
@@ -2884,121 +2792,24 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                     if (pickedImageUrls.isNotEmpty) const SizedBox(height: 14),
-                    if (isRecording)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 14),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF1F3),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.fiber_manual_record, color: Colors.red, size: 18),
-                            const SizedBox(width: 8),
-                            const Text('Ses Kaydediliyor...',
-                                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                            const Spacer(),
-                            AnimatedBuilder(
-                              animation: _waveController,
-                              builder: (context, child) {
-                                return Row(
-                                  children: List.generate(8, (index) {
-                                    final height = 8 + (sin(_waveController.value * pi + index) * 16).abs();
-                                    return Container(
-                                      width: 3.5,
-                                      height: height,
-                                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.redAccent,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                    );
-                                  }),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
                     Row(
                       children: [
-                        ElevatedButton.icon(
-                          onPressed: () async {
-                            if (!isRecording) {
-                              try {
-                                final stream = await html.window.navigator.mediaDevices?.getUserMedia({'audio': true});
-                                if (stream != null) {
-                                  audioChunks = [];
-                                  mediaRecorder = html.MediaRecorder(stream);
-
-                                  mediaRecorder!.addEventListener('dataavailable', (event) {
-                                    final blobEvent = event as html.BlobEvent;
-                                    if (blobEvent.data != null) {
-                                      audioChunks.add(blobEvent.data!);
-                                    }
-                                  });
-
-                                  mediaRecorder!.addEventListener('stop', (event) {
-                                    final blob = html.Blob(audioChunks, 'audio/webm');
-                                    final reader = html.FileReader();
-                                    reader.readAsDataUrl(blob);
-                                    reader.onLoadEnd.listen((e) {
-                                      recordedAudioUrl = reader.result as String?;
-                                      setModalState(() {
-                                        isRecording = false;
-                                      });
-                                    });
-                                  });
-
-                                  mediaRecorder!.start();
-                                  setModalState(() {
-                                    isRecording = true;
-                                  });
-                                }
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Mikrofon izni alınamadı: $e')),
-                                );
-                              }
-                            } else {
-                              mediaRecorder?.stop();
-                            }
-                          },
-                          icon: Icon(isRecording ? Icons.stop : Icons.mic, color: Colors.white, size: 18),
-                          label: Text(
-                            isRecording ? 'Durdur' : (recordedAudioUrl != null ? 'Ses ✓' : 'Ses'),
-                            style: const TextStyle(color: Colors.white, fontSize: 12),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isRecording
-                                ? Colors.redAccent
-                                : (recordedAudioUrl != null ? const Color(0xFF2E7D32) : const Color(0xFFF48FB1)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
                         OutlinedButton.icon(
-                          onPressed: () {
-                            final uploadInput = html.FileUploadInputElement();
-                            uploadInput.accept = 'image/*';
-                            uploadInput.multiple = true;
-                            uploadInput.click();
-
-                            uploadInput.onChange.listen((e) {
-                              final files = uploadInput.files;
-                              if (files != null && files.isNotEmpty) {
-                                for (var file in files) {
-                                  final reader = html.FileReader();
-                                  reader.readAsDataUrl(file);
-                                  reader.onLoadEnd.listen((ev) {
-                                    setModalState(() {
-                                      pickedImageUrls.add(reader.result as String);
-                                    });
+                          onPressed: () async {
+                            final result = await FilePicker.platform.pickFiles(
+                              type: FileType.image,
+                              allowMultiple: true,
+                              withData: true,
+                            );
+                            if (result != null && result.files.isNotEmpty) {
+                              for (var file in result.files) {
+                                if (file.bytes != null) {
+                                  setModalState(() {
+                                    pickedImageUrls.add('data:image/png;base64,${base64Encode(file.bytes!)}');
                                   });
                                 }
                               }
-                            });
+                            }
                           },
                           icon: const Icon(Icons.add_photo_alternate, size: 18, color: Color(0xFFD81B60)),
                           label: Text(
@@ -3013,15 +2824,11 @@ class _HomeScreenState extends State<HomeScreen>
                         const Spacer(),
                         ElevatedButton(
                           onPressed: () {
-                            if (textController.text.trim().isNotEmpty ||
-                                recordedAudioUrl != null ||
-                                pickedImageUrls.isNotEmpty) {
+                            if (textController.text.trim().isNotEmpty || pickedImageUrls.isNotEmpty) {
                               final friend = friends.firstWhere(
                                 (f) => f.name == widget.currentUser.baseRole,
                                 orElse: () => friends.first,
                               );
-
-                              final randomWave = List.generate(16, (i) => (10 + (Random().nextDouble() * 26)));
 
                               setState(() {
                                 memories.insert(
@@ -3030,12 +2837,11 @@ class _HomeScreenState extends State<HomeScreen>
                                     id: DateTime.now().millisecondsSinceEpoch.toString(),
                                     author: widget.currentUser.customUsername,
                                     content: textController.text.trim().isEmpty
-                                        ? (recordedAudioUrl != null ? '🎙️ Sesli Not' : '📸 Fotoğraflar')
+                                        ? '📸 Fotoğraflar'
                                         : textController.text.trim(),
                                     date: selectedMemoryDate,
-                                    audioUrl: recordedAudioUrl,
                                     imageUrls: List.from(pickedImageUrls),
-                                    waveHeights: recordedAudioUrl != null ? randomWave : [],
+                                    waveHeights: [],
                                     themeColor: friend.textColor,
                                   ),
                                 );
@@ -3063,6 +2869,372 @@ class _HomeScreenState extends State<HomeScreen>
       },
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('İyiki 🌸', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFD81B60))),
+        backgroundColor: Colors.white,
+        elevation: 0.5,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_outline, color: Color(0xFFD81B60)),
+            onPressed: _openUserProfileDialog,
+          ),
+        ],
+      ),
+      body: _buildCurrentTab(),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedTabIndex,
+        onDestinationSelected: (idx) => setState(() => _selectedTabIndex = idx),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.favorite_outline), selectedIcon: Icon(Icons.favorite), label: 'Anılar'),
+          NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), selectedIcon: Icon(Icons.auto_awesome), label: 'Özel Günler'),
+          NavigationDestination(icon: Icon(Icons.checklist), label: 'Hayaller'),
+          NavigationDestination(icon: Icon(Icons.group_outlined), selectedIcon: Icon(Icons.group), label: 'Biz'),
+        ],
+      ),
+      floatingActionButton: _selectedTabIndex == 0
+          ? FloatingActionButton(
+              onPressed: _showAddMemoryDialog,
+              backgroundColor: const Color(0xFFD81B60),
+              child: const Icon(Icons.add, color: Colors.white),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildCurrentTab() {
+    switch (_selectedTabIndex) {
+      case 0:
+        return _buildMemoriesTab();
+      case 1:
+        return _buildSpecialDaysTab();
+      case 2:
+        return _buildBucketListTab();
+      case 3:
+        return _buildFriendsTab();
+      default:
+        return _buildMemoriesTab();
+    }
+  }
+
+  Widget _buildMemoriesTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildStoriesSection(),
+        const SizedBox(height: 16),
+        _buildCountdownBanner(),
+        const SizedBox(height: 16),
+        if (memories.isEmpty)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text('Henüz kaydedilmiş anı yok. İlk anıyı sen ekle! 🌸', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+            ),
+          )
+        else
+          ...memories.map((m) => _buildMemoryCard(m)),
+      ],
+    );
+  }
+
+  Widget _buildStoriesSection() {
+    return SizedBox(
+      height: 95,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          GestureDetector(
+            onTap: _showAddStoryDialog,
+            child: const Column(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Color(0xFFFCE4EC),
+                  child: Icon(Icons.add, color: Color(0xFFD81B60)),
+                ),
+                SizedBox(height: 4),
+                Text('Hikaye Ekle', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          ...activeStories.map((story) {
+            return GestureDetector(
+              onTap: () => _openMultiStoryViewer([story], 0),
+              child: Container(
+                margin: const EdgeInsets.only(right: 14),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFFD81B60), width: 2),
+                      ),
+                      child: CircleAvatar(
+                        radius: 26,
+                        backgroundImage: story.imageUrl.startsWith('data:')
+                            ? MemoryImage(base64Decode(story.imageUrl.split(',').last))
+                            : NetworkImage(story.imageUrl) as ImageProvider,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(story.authorName, style: const TextStyle(fontSize: 11)),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCountdownBanner() {
+    final difference = DateTime.now().difference(lastMeetDate).inDays;
+    return GestureDetector(
+      onTap: _showLastMeetDialog,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFCE4EC),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.favorite, color: Color(0xFFD81B60), size: 28),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Hasret Sayacı ⏳', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF880E4F))),
+                  Text('$difference gündür görüşmedik!', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFD81B60))),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFFD81B60)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMemoryCard(MemoryItem m) {
+    final isLiked = m.likedBy.contains(widget.currentUser.customUsername);
+    final isAuthor = m.author == widget.currentUser.customUsername;
+
+    return Card(
+      key: _memoryKeys.putIfAbsent(m.id, () => GlobalKey()),
+      margin: const EdgeInsets.only(bottom: 16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      color: _highlightedMemoryId == m.id ? const Color(0xFFFFF0F5) : Colors.white,
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: m.themeColor.withValues(alpha: 0.2),
+                  child: Text(m.author.isNotEmpty ? m.author[0] : '🌸', style: TextStyle(color: m.themeColor, fontWeight: FontWeight.bold)),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(m.author, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    Text(DateFormat('dd MMMM yyyy').format(m.date), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  ],
+                ),
+                const Spacer(),
+                if (isAuthor || widget.currentUser.baseRole == 'Defne' || widget.isDefneVisiting)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.grey, size: 18),
+                    onPressed: () => _deleteMemory(m.id),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (m.content.isNotEmpty)
+              Text(m.content, style: const TextStyle(fontSize: 14, color: Color(0xFF2D3142))),
+            if (m.imageUrls.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _FacebookStylePhotoGrid(
+                images: m.imageUrls,
+                onTapImage: (idx) => _openFullScreenGallery(m.imageUrls, idx),
+              ),
+            ],
+            if (m.audioUrl != null) ...[
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                onPressed: () => _playAudio(m.id, m.audioUrl!),
+                icon: Icon(_currentlyPlayingId == m.id ? Icons.pause : Icons.play_arrow, color: Colors.white),
+                label: Text(_currentlyPlayingId == m.id ? 'Durdur' : 'Sesli Notu Dinle', style: const TextStyle(color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: m.themeColor,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                IconButton(
+                  icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.redAccent : Colors.grey),
+                  onPressed: () => _toggleLike(m),
+                ),
+                Text('${m.likedBy.length}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: const Icon(Icons.mode_comment_outlined, color: Colors.grey),
+                  onPressed: () => _openCommentsDialog(m),
+                ),
+                Text('${m.comments.length}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpecialDaysTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        ElevatedButton.icon(
+          onPressed: () => _showPlanDialog(),
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text('Yeni Plan / Geri Sayım Ekle', style: TextStyle(color: Colors.white)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFD81B60),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+        ),
+        const SizedBox(height: 16),
+        ...specialDays.map((plan) {
+          final daysLeft = plan.targetDate.difference(DateTime.now()).inDays;
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: ListTile(
+              contentPadding: const EdgeInsets.all(16),
+              leading: CircleAvatar(
+                backgroundColor: const Color(0xFFFCE4EC),
+                child: Icon(plan.icon, color: const Color(0xFFD81B60)),
+              ),
+              title: Text(plan.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              subtitle: Text('${DateFormat('dd MMMM yyyy').format(plan.targetDate)}\n${plan.description}'),
+              trailing: Text(
+                daysLeft >= 0 ? '$daysLeft gün' : 'Geçti',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFFD81B60)),
+              ),
+              onTap: () => _showPlanDialog(existingPlan: plan),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildBucketListTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        ElevatedButton.icon(
+          onPressed: _showAddBucketDialog,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text('Yeni Hayal Ekle', style: TextStyle(color: Colors.white)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF2D3142),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+        ),
+        const SizedBox(height: 16),
+        ...bucketList.map((item) {
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: CheckboxListTile(
+              value: item.isDone,
+              activeColor: const Color(0xFFD81B60),
+              title: Text(
+                item.title,
+                style: TextStyle(
+                  decoration: item.isDone ? TextDecoration.lineThrough : null,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+              subtitle: Text('Ekleyen: ${item.addedBy}', style: const TextStyle(fontSize: 11)),
+              onChanged: (val) {
+                setState(() {
+                  item.isDone = val ?? false;
+                });
+                _saveBucketListToStorage();
+              },
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildFriendsTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: friends.map((f) {
+        final avatar = friendAvatars[f.name];
+        final mood = friendMoods[f.name] ?? 'Harika hissediyor! 🌸';
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          color: f.cardColor,
+          elevation: 0,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 26,
+                    backgroundColor: Colors.white,
+                    backgroundImage: avatar != null
+                        ? (avatar.startsWith('data:')
+                            ? MemoryImage(base64Decode(avatar.split(',').last))
+                            : NetworkImage(avatar) as ImageProvider)
+                        : null,
+                    child: avatar == null ? Icon(f.icon, color: f.textColor, size: 28) : null,
+                  ),
+                  title: Text(f.name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: f.textColor)),
+                  subtitle: Text(f.role, style: TextStyle(fontWeight: FontWeight.w600, color: f.textColor.withValues(alpha: 0.8))),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () => _showFriendDetails(f),
+                ),
+                const Divider(),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('💭 Durum: $mood', style: TextStyle(fontSize: 12, color: f.textColor, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
 }
 
 class _FacebookStylePhotoGrid extends StatelessWidget {
@@ -3074,6 +3246,13 @@ class _FacebookStylePhotoGrid extends StatelessWidget {
     required this.onTapImage,
   });
 
+  ImageProvider _getImageProvider(String src) {
+    if (src.startsWith('data:')) {
+      return MemoryImage(base64Decode(src.split(',').last));
+    }
+    return NetworkImage(src);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (images.length == 1) {
@@ -3081,7 +3260,7 @@ class _FacebookStylePhotoGrid extends StatelessWidget {
         onTap: () => onTapImage(0),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
-          child: Image.network(images[0], height: 220, width: double.infinity, fit: BoxFit.cover),
+          child: Image(image: _getImageProvider(images[0]), height: 220, width: double.infinity, fit: BoxFit.cover),
         ),
       );
     }
@@ -3096,7 +3275,7 @@ class _FacebookStylePhotoGrid extends StatelessWidget {
                 onTap: () => onTapImage(0),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.network(images[0], height: 170, fit: BoxFit.cover),
+                  child: Image(image: _getImageProvider(images[0]), height: 170, fit: BoxFit.cover),
                 ),
               ),
             ),
@@ -3106,55 +3285,8 @@ class _FacebookStylePhotoGrid extends StatelessWidget {
                 onTap: () => onTapImage(1),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.network(images[1], height: 170, fit: BoxFit.cover),
+                  child: Image(image: _getImageProvider(images[1]), height: 170, fit: BoxFit.cover),
                 ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (images.length == 3) {
-      return SizedBox(
-        height: 200,
-        child: Row(
-          children: [
-            Expanded(
-              flex: 2,
-              child: GestureDetector(
-                onTap: () => onTapImage(0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.network(images[0], height: 200, fit: BoxFit.cover),
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              flex: 1,
-              child: Column(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => onTapImage(1),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Image.network(images[1], width: double.infinity, fit: BoxFit.cover),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => onTapImage(2),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: Image.network(images[2], width: double.infinity, fit: BoxFit.cover),
-                      ),
-                    ),
-                  ),
-                ],
               ),
             ),
           ],
@@ -3163,73 +3295,40 @@ class _FacebookStylePhotoGrid extends StatelessWidget {
     }
 
     return SizedBox(
-      height: 220,
-      child: Column(
+      height: 200,
+      child: Row(
         children: [
           Expanded(
-            child: Row(
+            flex: 2,
+            child: GestureDetector(
+              onTap: () => onTapImage(0),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image(image: _getImageProvider(images[0]), height: 200, fit: BoxFit.cover),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            flex: 1,
+            child: Column(
               children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => onTapImage(0),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.network(images[0], height: double.infinity, fit: BoxFit.cover),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
                 Expanded(
                   child: GestureDetector(
                     onTap: () => onTapImage(1),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(14),
-                      child: Image.network(images[1], height: double.infinity, fit: BoxFit.cover),
+                      child: Image(image: _getImageProvider(images[1]), width: double.infinity, fit: BoxFit.cover),
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Expanded(
-            child: Row(
-              children: [
+                const SizedBox(height: 6),
                 Expanded(
                   child: GestureDetector(
                     onTap: () => onTapImage(2),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(14),
-                      child: Image.network(images[2], height: double.infinity, fit: BoxFit.cover),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => onTapImage(3),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(14),
-                          child: Image.network(images[3], fit: BoxFit.cover),
-                        ),
-                        if (images.length > 4)
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.55),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Center(
-                              child: Text(
-                                '+${images.length - 3}',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                      ],
+                      child: Image(image: _getImageProvider(images[2]), width: double.infinity, fit: BoxFit.cover),
                     ),
                   ),
                 ),
